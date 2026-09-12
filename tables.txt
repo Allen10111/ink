@@ -1,0 +1,4 @@
+local users = {"Bsgavcagw"}
+local blacklisted = {}
+local whitelisted = {}
+return users, blacklisted, whitelisted
