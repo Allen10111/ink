@@ -1,3 +1,6 @@
+-- users = people who bought the script (allowed)
+-- whitelisted = extra allowed names
+-- blacklisted = blocked
 local users = {"Alastor3274"}
 local blacklisted = {}
 local whitelisted = {}
