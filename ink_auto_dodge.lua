@@ -1,5 +1,8 @@
 -- Ink Game auto dodge
--- Access check lives in this file. Only users/whitelisted in tables.txt can run.
+-- Access:
+--   users       = people who bought the script (allowed)
+--   whitelisted = extra allowed names
+--   blacklisted = blocked even if they bought it
 
 if not game:IsLoaded() then
     game.Loaded:Wait()
@@ -40,14 +43,17 @@ if not ok then
 end
 
 local me = LocalPlayer.Name
+local bought = nameInList(me, users)
+local extra = nameInList(me, whitelisted)
+local banned = nameInList(me, blacklisted)
 
-if nameInList(me, blacklisted) then
+if banned then
     deny("You are blacklisted")
     return
 end
 
-if not (nameInList(me, users) or nameInList(me, whitelisted)) then
-    deny("You are not whitelisted")
+if not (bought or extra) then
+    deny("You did not buy this script")
     return
 end
 
