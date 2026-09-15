@@ -24,24 +24,30 @@ local function nameInList(name, list)
     return false
 end
 
+local function deny(reason)
+    pcall(function()
+        LocalPlayer:Kick(reason or "Not authorized")
+    end)
+end
+
 local ok, users, blacklisted, whitelisted = pcall(function()
     return loadstring(game:HttpGet(LIST_URL))()
 end)
 
 if not ok then
-    warn("[Ink Auto Dodge] Failed to load access list")
+    deny("Failed to load access list")
     return
 end
 
 local me = LocalPlayer.Name
 
 if nameInList(me, blacklisted) then
-    warn("[Ink Auto Dodge] Access denied")
+    deny("You are blacklisted")
     return
 end
 
 if not (nameInList(me, users) or nameInList(me, whitelisted)) then
-    warn("[Ink Auto Dodge] Access denied")
+    deny("You are not whitelisted")
     return
 end
 
