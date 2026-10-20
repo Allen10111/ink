@@ -1,7 +1,7 @@
--- Ink Game auto dodge v8.03 Mobile
--- Tap the draggable circle to toggle. Red OFF; green ON. Starts OFF.
+-- Ink Game uncertainty-aware intent-ensemble auto dodge v8.04 (PC)
+-- F1 toggles the system. It starts OFF.
 -- No intentional reaction wait after first confirmed threat contact.
--- Movement keys have zero nominal hold; release follows scheduler timing.
+-- Native dash event only; no synthetic keyboard input or intentional reaction wait.
 --
 -- Stability design:
 --   * No getgc/decompile/remote-spy work at runtime.
@@ -29,6 +29,11 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+
+if not UserInputService.KeyboardEnabled then
+    warn("[Ink Auto Dodge] PC keyboard version only")
+    return
+end
 
 local LocalPlayer = Players.LocalPlayer
 local Values = workspace:WaitForChild("Values", 10)
@@ -98,8 +103,7 @@ local ZERO = Vector3.zero
 local DIRECTION_SAMPLE_TIMES = { 0.04, 0.08, 0.14, 0.22, 0.34, 0.5 }
 
 local State = {
-    Version = 8.03,
-    MobileVersion = true,
+    Version = 8.04,
     MinimumActionPlanningBudget = 0.0018,
     PlanningReserveUses = 0,
     LocalRestCorrections = 0,
@@ -375,10 +379,7 @@ local State = {
     DirectionLeaseRestores = 0,
     DirectionLeaseConflicts = 0,
     LastDirectionLeaseMs = 0,
-    MovementKeyPulseToken = 0,
-    MovementKeysHeld = nil,
-    LastMovementKeyPulse = "None",
-    MovementKeyPulseDuration = 0,
+    DashDispatchMode = "Native event",
     FixedReactionMilliseconds = 0,
     ReactionLeadMilliseconds = 0, -- Additional prediction margin only.
     DirectionVerifiedDodges = 0,
@@ -1080,135 +1081,175 @@ local function nativeDashAvailable(character, humanoid)
 end
 
 local StatusGui = Instance.new("ScreenGui")
-StatusGui.Name = "InkAutoDodgeMobile"
+StatusGui.Name = "InkAnimationAutoDodge"
 StatusGui.ResetOnSpawn = false
-StatusGui.IgnoreGuiInset = false
+StatusGui.IgnoreGuiInset = true
 StatusGui.DisplayOrder = 1000000
-StatusGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 StatusGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local StatusLabel
 do
-    local area = Instance.new("Frame")
-    area.Name = "DragArea"
-    area.Size = UDim2.fromScale(1, 1)
-    area.BackgroundTransparency = 1
-    area.BorderSizePixel = 0
-    area.Active = false
-    area.Parent = StatusGui
+local StatusPanel = Instance.new("Frame")
+StatusPanel.Name = "Panel"
+StatusPanel.AnchorPoint = Vector2.new(0.5, 0)
+StatusPanel.Position = UDim2.fromScale(0.5, 0.025)
+StatusPanel.Size = UDim2.fromOffset(940, 222)
+StatusPanel.BackgroundColor3 = Color3.fromRGB(15, 17, 23)
+StatusPanel.BackgroundTransparency = 0.08
+StatusPanel.BorderSizePixel = 0
+StatusPanel.Parent = StatusGui
 
-    local button = Instance.new("TextButton")
-    button.Name = "Toggle"
-    button.Size = UDim2.fromOffset(64, 64)
-    button.Position = UDim2.new(0.82, 0, 0.28, 0)
-    button.Text = ""
-    button.AutoButtonColor = false
-    button.BackgroundColor3 = Color3.fromRGB(164, 55, 62)
-    button.BorderSizePixel = 0
-    button.Active = true
-    button.Selectable = false
-    button.Parent = area
+local PanelCorner = Instance.new("UICorner")
+PanelCorner.CornerRadius = UDim.new(0, 10)
+PanelCorner.Parent = StatusPanel
 
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = button
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(235, 240, 250)
-    stroke.Thickness = 2
-    stroke.Transparency = 0.15
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Parent = button
-    State.ToggleButton = button
-    State.MobileDragArea = area
-end
+local PanelStroke = Instance.new("UIStroke")
+PanelStroke.Color = Color3.fromRGB(78, 91, 108)
+PanelStroke.Transparency = 0.25
+PanelStroke.Thickness = 1
+PanelStroke.Parent = StatusPanel
 
-function State:ClampMobilePosition(position)
-    local size = self.MobileDragArea.AbsoluteSize
-    local buttonSize = self.ToggleButton.AbsoluteSize
-    local margin = 10
-    local maxX = math.max(0, size.X - buttonSize.X - margin)
-    local maxY = math.max(0, size.Y - buttonSize.Y - margin)
-    return Vector2.new(
-        math.clamp(position.X, math.min(margin, maxX), maxX),
-        math.clamp(position.Y, math.min(margin, maxY), maxY)
-    )
-end
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Name = "Toggle"
+ToggleButton.Position = UDim2.fromOffset(10, 10)
+ToggleButton.Size = UDim2.fromOffset(245, 40)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(164, 55, 62)
+ToggleButton.BorderSizePixel = 0
+ToggleButton.AutoButtonColor = true
+ToggleButton.Font = Enum.Font.GothamBold
+ToggleButton.Text = "AUTO DODGE: OFF  [F1]"
+ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleButton.TextSize = 16
+ToggleButton.Parent = StatusPanel
 
-function State:PlaceMobileButton(position)
-    if self.Destroyed or self.MobileDragArea.AbsoluteSize.X <= 0 then return end
-    local point = self:ClampMobilePosition(position)
-    self.ToggleButton.Position = UDim2.fromOffset(point.X, point.Y)
-end
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(0, 8)
+ToggleCorner.Parent = ToggleButton
 
-function State:BeginMobilePointer(input)
-    if self.Destroyed or self.MobilePointer then return false end
-    local kind = input.UserInputType
-    if kind ~= Enum.UserInputType.Touch and kind ~= Enum.UserInputType.MouseButton1 then return false end
-    self.MobilePointer = input
-    self.MobilePointerStart = Vector2.new(input.Position.X, input.Position.Y)
-    self.MobileButtonStart = self.ToggleButton.AbsolutePosition - self.MobileDragArea.AbsolutePosition
-    self.MobileDragging = false
-    return true
-end
+local HideHint = Instance.new("TextLabel")
+HideHint.Name = "HideHint"
+HideHint.Position = UDim2.new(1, -330, 0, 10)
+HideHint.Size = UDim2.fromOffset(320, 40)
+HideHint.BackgroundTransparency = 1
+HideHint.Font = Enum.Font.Gotham
+HideHint.Text = "Right Shift: hide/show GUI"
+HideHint.TextColor3 = Color3.fromRGB(185, 195, 210)
+HideHint.TextSize = 14
+HideHint.TextXAlignment = Enum.TextXAlignment.Right
+HideHint.Parent = StatusPanel
 
-function State:MoveMobilePointer(input)
-    local pointer = self.MobilePointer
-    if self.Destroyed or not pointer then return false end
-    if pointer.UserInputType == Enum.UserInputType.Touch then
-        if input ~= pointer then return false end
-    elseif input.UserInputType ~= Enum.UserInputType.MouseMovement then
-        return false
-    end
-    local point = Vector2.new(input.Position.X, input.Position.Y)
-    local delta = point - self.MobilePointerStart
-    if delta.Magnitude >= 8 then self.MobileDragging = true end
-    if self.MobileDragging then self:PlaceMobileButton(self.MobileButtonStart + delta) end
-    return self.MobileDragging
-end
-
-function State:EndMobilePointer(input)
-    if input ~= self.MobilePointer then return false end
-    self.MobileLastReleasedInput = input
-    if self.MobileDragging then self.MobileBlockTapUntil = os.clock() + 0.25 end
-    self.MobilePointer = nil
-    self.MobileDragging = false
-    return true
-end
-
-function State:ActivateMobileToggle(input)
-    if self.Destroyed or self.MobileDragging
-        or os.clock() < (self.MobileBlockTapUntil or 0) then return false end
-    -- Another finger can operate the joystick without becoming the toggle.
-    if input and input.UserInputType == Enum.UserInputType.Touch
-        and input ~= self.MobileLastReleasedInput and input ~= self.MobilePointer then return false end
-    self:SetEnabled(not self.Enabled)
-    return true
-end
-
-function State:BindMobileToggle()
-    local function bind(signal, callback)
-        self.LifetimeConnections[#self.LifetimeConnections + 1] = signal:Connect(callback)
-    end
-    local button = self.ToggleButton
-    bind(button.InputBegan, function(input) self:BeginMobilePointer(input) end)
-    bind(UserInputService.InputChanged, function(input) self:MoveMobilePointer(input) end)
-    bind(UserInputService.InputEnded, function(input) self:EndMobilePointer(input) end)
-    bind(button.Activated, function(input) self:ActivateMobileToggle(input) end)
-    bind(self.MobileDragArea:GetPropertyChangedSignal("AbsoluteSize"), function()
-        -- Reset gesture coordinates on rotation/resizing; never toggle on resize.
-        self.MobilePointer = nil
-        self.MobileDragging = false
-        self.MobileBlockTapUntil = os.clock() + 0.25
-        self:PlaceMobileButton(button.AbsolutePosition - self.MobileDragArea.AbsolutePosition)
-    end)
-    task.defer(function()
-        self:PlaceMobileButton(button.AbsolutePosition - self.MobileDragArea.AbsolutePosition)
-    end)
+StatusLabel = Instance.new("TextLabel")
+StatusLabel.Name = "Status"
+StatusLabel.Position = UDim2.fromOffset(10, 58)
+StatusLabel.Size = UDim2.new(1, -20, 1, -68)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.BorderSizePixel = 0
+StatusLabel.Font = Enum.Font.GothamBold
+StatusLabel.TextSize = 15
+StatusLabel.TextWrapped = true
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Center
+StatusLabel.TextYAlignment = Enum.TextYAlignment.Center
+StatusLabel.TextColor3 = Color3.fromRGB(255, 135, 135)
+StatusLabel.Parent = StatusPanel
+State.ToggleButton = ToggleButton
 end
 
 local function updateStatus(force)
-    if State.Destroyed or not State.ToggleButton.Parent then return end
+    if State.Destroyed or not StatusLabel.Parent then
+        return
+    end
+    local now = os.clock()
+    if not force and now < State.NextStatusAt then
+        return
+    end
+    State.NextStatusAt = now + 0.2
+    local reactionText = State.LastReactionMilliseconds >= 0
+        and string.format("%.2f ms", State.LastReactionMilliseconds)
+        or "--"
+    local acknowledgementText = State.LastAcknowledgementMilliseconds >= 0
+        and string.format("%.2f ms", State.LastAcknowledgementMilliseconds)
+        or "--"
+    local impactText = State.LastImpactEarliest >= 0
+        and string.format(
+            "%d-%d ms",
+            math.floor(State.LastImpactEarliest * 1000 + 0.5),
+            math.floor(math.max(
+                State.LastImpactEarliest,
+                State.LastImpactLatest
+            ) * 1000 + 0.5)
+        ) or "--"
+    local character = LocalPlayer.Character
+    local dashText = State.NativeModel and State.NativeModel.Mode or "Normal"
+    if State:IsPhantomStepActive(character) then
+        -- Rendering must remain read-only and allocation-light.  The engine
+        -- refreshes this cache; the HUD never performs controller discovery.
+        local ready = State.PhantomChargesReady or 0
+        local maximum = State.PhantomChargesMax or 0
+        local source = State.PhantomStateSource or "Pending"
+        dashText = string.format(
+            "Phantom Step %d/%d (%s)",
+            ready,
+            maximum,
+            source == "Controller" and "exact" or "safe"
+        )
+    end
+    StatusLabel.TextColor3 = State.Enabled
+        and Color3.fromRGB(135, 255, 165)
+        or Color3.fromRGB(255, 135, 135)
+    State.ToggleButton.Text = State.Enabled
+        and "AUTO DODGE: ON  [F1]"
+        or "AUTO DODGE: OFF  [F1]"
     State.ToggleButton.BackgroundColor3 = State.Enabled
-        and Color3.fromRGB(36, 165, 91) or Color3.fromRGB(164, 55, 62)
-    StatusGui.Enabled = true
+        and Color3.fromRGB(36, 165, 91)
+        or Color3.fromRGB(164, 55, 62)
+    StatusGui.Enabled = State.GuiVisible
+    StatusLabel.Text = string.format(
+        "MAP-AWARE BELIEF-SPACE AUTO DODGE v8.04: %s  [F1]  Dash: %s\nWatchers: %d  Threats: %d  Physical: %d  Dash ACKs: %d\nLast: %s [%s]  Direction: %s  Contact: %d ms  Delay: %d/%d ms\nReaction: %s  Ack: %s  Projectile: %s  Plan score: %d%%\nIntent: %s %d%%  Paths: %d  Group: %d/%d  Tail risk: %d%%  Window: %s  Envelope: %s\nTerrain: %s  Ground vetoes: %d  Priority skips: %d  Fling brakes: %d  Block: %s\nMap: %d/%d %s  Rev: %d  Parts: %d  Models: %d  Hazards: %d  Barriers: %d  Moving: %d\nMPC: %.2f ms / %d tests  Work: %.2f ms  Gap: %.1f/%.1f ms  Deferred: %d",
+        State.Enabled and "ON" or "OFF",
+        dashText,
+        State.WatcherCount,
+        State.PendingCount,
+        State.ProjectileCount,
+        State.AcceptedDodges,
+        State.LastThreat,
+        State.LastEvidenceTier,
+        State.LastDirection,
+        State.LastContactMilliseconds,
+        math.floor(State.LastActivationDelay * 1000 + 0.5),
+        math.floor(State.LastMpcLatestDelay * 1000 + 0.5),
+        reactionText,
+        acknowledgementText,
+        State.LastProjectileModel,
+        math.floor(State.LastPlanConfidence * 100 + 0.5),
+        State.LastIntentModel,
+        math.floor(State.LastIntentConfidence * 100 + 0.5),
+        State.LastPathHypotheses,
+        State.LastGroupThreatCount,
+        State.LastGroupSourceCount,
+        math.floor(State.LastTailRisk * 100 + 0.5),
+        impactText,
+        State.LastEnvelopeComplete and "complete" or "conservative",
+        State.LastTerrainStatus,
+        State.TerrainRejectedDodges,
+        State.ThreatPrioritySkips,
+        State.FlingGuardTrips,
+        State.LastBlockReason,
+        State.MapRegisteredCount,
+        State.MapAuditTotal,
+        State.MapAuditComplete and "complete" or "indexing",
+        State.MapRevision,
+        State.MapAuditParts,
+        State.MapAuditModels,
+        State.MapHazardCount,
+        State.MapBarrierCount,
+        State.MapMovingParts,
+        State.LastMpcMilliseconds,
+        State.LastMpcTests,
+        State.FrameWorkMean * 1000,
+        State.LastFrameGapMilliseconds,
+        State.MaximumFrameGapMilliseconds,
+        State.DeferredThreatEvaluations
+    )
 end
 
 local function reportError(context, message)
@@ -1605,6 +1646,7 @@ function State:GetAuditSnapshot(limit)
         Version = self.Version, Profiles = profiles, Outcomes = outcomes,
         Blocks = blocks, RecentEvents = self:GetReplaySnapshot(math.min(limit, 24)),
         ProfileCount = self.AttackAuditCount, DroppedProfiles = self.AuditDroppedProfiles,
+        DashDispatchMode = self.DashDispatchMode,
         NativeDashMode = self.NativeModel and self.NativeModel.Mode or "Not sampled",
         NativeBoostSource = self.NativeBoostSource,
         HitboxModuleEvidence = self.HitboxModuleEvidence,
@@ -7152,64 +7194,6 @@ local function retireCoveredThreats(now, primary)
     end
 end
 
-function State:MovementKeysForDirection(direction)
-    local camera = workspace.CurrentCamera
-    local character = LocalPlayer.Character
-    local root = character and character:FindFirstChild("HumanoidRootPart")
-    local forward = camera and camera.CFrame.LookVector
-        or root and root.CFrame.LookVector or Vector3.new(0, 0, -1)
-    local right = camera and camera.CFrame.RightVector
-        or root and root.CFrame.RightVector or Vector3.new(1, 0, 0)
-    forward = horizontalUnit(forward)
-    right = horizontalUnit(right)
-    direction = horizontalUnit(direction, forward)
-    local forwardAmount = direction:Dot(forward)
-    local rightAmount = direction:Dot(right)
-    local keys = {}
-    if math.abs(forwardAmount) >= 0.28 then
-        keys[#keys + 1] = forwardAmount >= 0
-            and { Code = Enum.KeyCode.W, VirtualKey = 0x57, Name = "W" }
-            or { Code = Enum.KeyCode.S, VirtualKey = 0x53, Name = "S" }
-    end
-    if math.abs(rightAmount) >= 0.28 then
-        keys[#keys + 1] = rightAmount >= 0
-            and { Code = Enum.KeyCode.D, VirtualKey = 0x44, Name = "D" }
-            or { Code = Enum.KeyCode.A, VirtualKey = 0x41, Name = "A" }
-    end
-    if #keys == 0 then
-        keys[1] = math.abs(forwardAmount) >= math.abs(rightAmount)
-            and (forwardAmount >= 0
-                and { Code = Enum.KeyCode.W, VirtualKey = 0x57, Name = "W" }
-                or { Code = Enum.KeyCode.S, VirtualKey = 0x53, Name = "S" })
-            or (rightAmount >= 0
-                and { Code = Enum.KeyCode.D, VirtualKey = 0x44, Name = "D" }
-                or { Code = Enum.KeyCode.A, VirtualKey = 0x41, Name = "A" })
-    end
-    return keys
-end
-
-function State:StopMovementKeyPulse(token)
-    if token and token ~= self.MovementKeyPulseToken then
-        return false
-    end
-    self.MovementKeyPulseToken += 1
-    local held = self.MovementKeysHeld
-    self.MovementKeysHeld = nil
-    if held and type(keyrelease) == "function" then
-        for _, record in ipairs(held) do
-            pcall(keyrelease, record.VirtualKey)
-        end
-    end
-    return held ~= nil
-end
-
-function State:StartMovementKeyPulse(direction)
-    -- Mobile uses Humanoid:Move plus the native controller direction path.
-    -- Never synthesize desktop keys or require a keyboard/focus API.
-    self.LastMovementKeyPulse = "Touch direction"
-    return false
-end
-
 local function restoreDirectionLease(token, fromTask)
     local lease = State.DirectionLease
     if not lease or token and lease.Token ~= token then
@@ -10917,6 +10901,16 @@ function State:MonitorDashSafety(now, character, root)
     end
 end
 
+-- Info's release payload has no direction field: the native controller
+-- samples Humanoid.MoveDirection when shared.controllerpressed is true.
+-- Set that direction directly, then dispatch without a key pulse or wait.
+function State:ReleaseNativeDash(info, humanoid, direction)
+    humanoid:Move(direction, false)
+    local releaseAt = os.clock()
+    info:Fire({ DashingReleased = true })
+    return releaseAt
+end
+
 local function nativeDodge(threat, suppliedPlan)
     if threat.Character and threat.Character == LocalPlayer.Character then
         State.LastBlockReason = "Own attack ignored"
@@ -11270,10 +11264,7 @@ local function nativeDodge(threat, suppliedPlan)
     local releaseAt
     local ok, message = xpcall(function()
         rawset(shared, "controllerpressed", true)
-        State:StartMovementKeyPulse(direction)
-        humanoid:Move(direction, false)
-        releaseAt = os.clock()
-        info:Fire({ DashingReleased = true })
+        releaseAt = State:ReleaseNativeDash(info, humanoid, direction)
         State.DashReleases += 1
         if phantomStep then
             State.PhantomDashReleases += 1
@@ -13435,6 +13426,26 @@ function State:RunSelfTest()
         probe.FrameBudgetActive=false
         result.CallbackPlannerBounded = probe:ActionPlanningDeadline(10,.002) <= 10.002001
     end
+    do
+        local order = {}
+        local direction = Vector3.new(1, 0, 0)
+        local moved, payload
+        local humanoid = { Move = function(_, value, relative)
+            moved = value
+            order[#order + 1] = relative == false and "direction" or "invalid"
+        end }
+        local info = { Fire = function(_, value)
+            payload = value
+            order[#order + 1] = "event"
+        end }
+        local releasedAt = self:ReleaseNativeDash(info, humanoid, direction)
+        result.NativeEventDirectionBeforeRelease = moved == direction
+            and #order == 2 and order[1] == "direction" and order[2] == "event"
+        result.NativeEventSingleUnchargedPayload = payload.DashingReleased == true
+            and payload.Dashing == nil and finiteNumber(releasedAt)
+        result.NativeEventDispatchConfigured = self.DashDispatchMode == "Native event"
+            and self.StartMovementKeyPulse == nil and self.StopMovementKeyPulse == nil
+    end
     for _, value in pairs(result) do
         if value ~= true then
             passed = false
@@ -13472,7 +13483,6 @@ end
 local function stopActiveWork()
     State:StopDodgeAudits("Disabled or reset")
     State.Initializing = false
-    State:StopMovementKeyPulse()
     restoreDirectionLease(nil, false)
     local pendingAttempt = State.AttemptPending
     if pendingAttempt then
@@ -13644,5 +13654,31 @@ function State:Destroy()
     end
 end
 
-State:BindMobileToggle()
+State.LifetimeConnections[#State.LifetimeConnections + 1] =
+    UserInputService.InputBegan:Connect(guarded("toggle", function(input, processed)
+        if UserInputService:GetFocusedTextBox() then
+            return
+        end
+        if input.KeyCode == Enum.KeyCode.F6 and not processed then
+            print("[Ink Auto Dodge Audit] " .. State:GetAuditJSON(24))
+            return
+        end
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            State.GuiVisible = not State.GuiVisible
+            StatusGui.Enabled = State.GuiVisible
+            return
+        end
+        if not processed and input.KeyCode == State.ToggleKey then
+            State:SetEnabled(not State.Enabled)
+        end
+    end))
+
+State.LifetimeConnections[#State.LifetimeConnections + 1] =
+    State.ToggleButton.Activated:Connect(guarded("gui toggle", function()
+        if not State.Destroyed then
+            State:SetEnabled(not State.Enabled)
+        end
+    end))
+
 updateStatus(true)
+warn("[Ink Auto Dodge] Map-aware belief-space intent ensemble v8.04 loaded OFF - use F1 or the GUI button; Right Shift hides/shows the GUI; F6 prints the evidence/outcome audit")
